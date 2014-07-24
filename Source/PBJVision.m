@@ -137,6 +137,7 @@ typedef NS_ENUM(GLint, PBJVisionUniformLocationTypes)
     AVCaptureOutput *_currentOutput;
     
     AVCaptureVideoPreviewLayer *_previewLayer;
+    BOOL _detectFaces;
     CIDetector *_faceDetector;
     CGRect _cleanAperture;
 
@@ -152,6 +153,7 @@ typedef NS_ENUM(GLint, PBJVisionUniformLocationTypes)
     size_t _bufferWidth;
     size_t _bufferHeight;
     CGRect _presentationFrame;
+    CMTime _lastDetectionTimestamp;
 
     EAGLContext *_context;
     PBJGLProgram *_program;
@@ -194,6 +196,7 @@ typedef NS_ENUM(GLint, PBJVisionUniformLocationTypes)
 @synthesize flashMode = _flashMode;
 @synthesize mirroringMode = _mirroringMode;
 @synthesize mirrored = _mirrored;
+@synthesize detectFaces = _detectFaces;
 @synthesize outputFormat = _outputFormat;
 @synthesize context = _context;
 @synthesize presentationFrame = _presentationFrame;
@@ -1017,9 +1020,10 @@ typedef void (^PBJVisionBlock)();
                     newCaptureOutput = _captureOutputVideo;
                 }
 
-                NSDictionary *detectorOptions = @{CIDetectorAccuracy:CIDetectorAccuracyLow};
-                _faceDetector = [CIDetector detectorOfType:CIDetectorTypeFace context:nil options:detectorOptions];
-
+                if(_detectFaces) {
+                    NSDictionary *detectorOptions = @{CIDetectorAccuracy:CIDetectorAccuracyLow};
+                    _faceDetector = [CIDetector detectorOfType:CIDetectorTypeFace context:nil options:detectorOptions];
+                }
                 break;
             }
             case PBJCameraModePhoto:
@@ -1051,6 +1055,7 @@ typedef void (^PBJVisionBlock)();
     NSString *sessionPreset = _captureSessionPreset;
 
     if ( newCaptureOutput && (newCaptureOutput == _captureOutputVideo) && videoConnection ) {
+        _lastDetectionTimestamp = kCMTimeInvalid;
         
         // setup video orientation
         //#warning this breaks it
@@ -1061,7 +1066,7 @@ typedef void (^PBJVisionBlock)();
             [videoConnection setEnablesVideoStabilizationWhenAvailable:YES];
 
         // discard late frames
-        [_captureOutputVideo setAlwaysDiscardsLateVideoFrames:YES];
+        [_captureOutputVideo setAlwaysDiscardsLateVideoFrames:NO];
         
         // specify video preset
         sessionPreset = _captureSessionPreset;
@@ -2023,33 +2028,23 @@ typedef void (^PBJVisionBlock)();
 }
 
 #pragma mark - AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptureVideoDataOutputSampleBufferDelegate
-
 - (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection
 {
-    // got an image
-    CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
-    CFDictionaryRef attachments = CMCopyDictionaryOfAttachments(kCFAllocatorDefault, sampleBuffer, kCMAttachmentMode_ShouldPropagate);
-    CIImage *ciImage = [[CIImage alloc] initWithCVPixelBuffer:pixelBuffer options:(__bridge NSDictionary *)attachments];
-    if (attachments)
-        CFRelease(attachments);
-    NSDictionary *imageOptions = nil;
-    UIDeviceOrientation curDeviceOrientation = [[UIDevice currentDevice] orientation];
-
-    imageOptions = @{CIDetectorImageOrientation:@([self _exifOrientationForDeviceOrientation:curDeviceOrientation]), CIDetectorSmile:@YES};
-    
-    // How many ms does this take? at 30fps, can derive live or post-processing time
-    NSArray *features = [_faceDetector featuresInImage:ciImage
-                                               options:imageOptions];
-    
-    dispatch_async(dispatch_get_main_queue(), ^(void) {
-        if([self.delegate respondsToSelector:@selector(vision:didDetectFaceFeatures:)])
-            [self.delegate vision:self didDetectFaceFeatures:features];
-    });
+    CFRetain(sampleBuffer);
 
     //---------------
     
-	CFRetain(sampleBuffer);
-    
+    CMTime currentTimestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+    if(_detectFaces) {
+        // Face detection is expensive. Delaying buffer processing causes memory to balloon, so a frame is face-detected every 1/2 second.
+        if(CMTIME_IS_INVALID(_lastDetectionTimestamp) || CMTimeGetSeconds(CMTimeSubtract(currentTimestamp, _lastDetectionTimestamp)) > 0.5) {
+            _lastDetectionTimestamp = currentTimestamp;
+            [self _detectFacesInSampleBuffer:sampleBuffer];
+        }
+    }
+
+    //---------------
+     
     if (!CMSampleBufferDataIsReady(sampleBuffer)) {
         DLog(@"sample buffer data is not ready");
         CFRelease(sampleBuffer);
@@ -2083,8 +2078,6 @@ typedef void (^PBJVisionBlock)();
         CFRelease(sampleBuffer);
         return;
     }
-
-    CMTime currentTimestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
 
     // calculate the length of the interruption
     if (_flags.interrupted && isAudio) {
@@ -2557,6 +2550,31 @@ typedef void (^PBJVisionBlock)();
         CFRelease(_chromaTexture);
         _chromaTexture = NULL;
     }
+}
+
+- (void)_detectFacesInSampleBuffer:(CMSampleBufferRef)sampleBuffer
+{
+    CMTime currentTimestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+    CMTimeShow(currentTimestamp);
+    
+    // got an image
+    CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    CFDictionaryRef attachments = CMCopyDictionaryOfAttachments(kCFAllocatorDefault, sampleBuffer, kCMAttachmentMode_ShouldPropagate);
+    CIImage *ciImage = [[CIImage alloc] initWithCVPixelBuffer:pixelBuffer options:(__bridge NSDictionary *)attachments];
+    if (attachments)
+        CFRelease(attachments);
+    NSDictionary *imageOptions = nil;
+    UIDeviceOrientation curDeviceOrientation = [[UIDevice currentDevice] orientation];
+    
+    imageOptions = @{CIDetectorImageOrientation:@([self _exifOrientationForDeviceOrientation:curDeviceOrientation]), CIDetectorSmile:@YES};
+    
+    NSArray *features = [_faceDetector featuresInImage:ciImage
+                                               options:imageOptions];
+    
+    dispatch_async(dispatch_get_main_queue(), ^(void) {
+        if([self.delegate respondsToSelector:@selector(vision:didScanFaceFeatures:)])
+            [self.delegate vision:self didScanFaceFeatures:features];
+    });
 }
 
 #pragma mark - OpenGLES context support

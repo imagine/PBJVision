@@ -162,6 +162,7 @@ static CGFloat const PBJVideoBitRate1280x750 = 5000000 * 8;
 @property (nonatomic, readonly) AVCaptureVideoPreviewLayer *previewLayer;
 @property (nonatomic) BOOL autoUpdatePreviewOrientation;
 @property (nonatomic) PBJCameraOrientation previewOrientation;
+@property (nonatomic) BOOL detectFaces;
 @property (nonatomic, readonly) CGRect cleanAperture;
 
 - (void)startPreview;
@@ -286,6 +287,6 @@ static CGFloat const PBJVideoBitRate1280x750 = 5000000 * 8;
 
 - (void)vision:(PBJVision *)vision didCaptureVideoSampleBuffer:(CMSampleBufferRef)sampleBuffer;
 - (void)vision:(PBJVision *)vision didCaptureAudioSample:(CMSampleBufferRef)sampleBuffer;
-- (void)vision:(PBJVision *)vision didDetectFaceFeatures:(NSArray*)features;
+- (void)vision:(PBJVision *)vision didScanFaceFeatures:(NSArray*)features;
 
 @end

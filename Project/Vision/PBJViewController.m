@@ -335,6 +335,7 @@ static CGFloat DegreesToRadians(CGFloat degrees) {return degrees * (CGFloat)M_PI
     vision.outputFormat = PBJOutputFormatSquare;
     vision.videoRenderingEnabled = YES;
     vision.additionalCompressionProperties = @{AVVideoProfileLevelKey : AVVideoProfileLevelH264Baseline30}; // AVVideoProfileLevelKey requires specific captureSessionPreset
+    vision.detectFaces = YES;
 }
 
 #pragma mark - UIButton
@@ -625,7 +626,7 @@ static CGFloat DegreesToRadians(CGFloat degrees) {return degrees * (CGFloat)M_PI
 //    NSLog(@"captured video (%f) seconds", vision.capturedVideoSeconds);
 }
 
-- (void)vision:(PBJVision *)vision didDetectFaceFeatures:(NSArray *)features
+- (void)vision:(PBJVision *)vision didScanFaceFeatures:(NSArray *)features
 {
     UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
     CGRect clap = [[PBJVision sharedInstance] cleanAperture];
@@ -703,13 +704,12 @@ static CGFloat DegreesToRadians(CGFloat degrees) {return degrees * (CGFloat)M_PI
 
             smileLayer = [CATextLayer new];
             smileLayer.string = @"😃";
-            smileLayer.foregroundColor = [UIColor whiteColor].CGColor;
             smileLayer.alignmentMode = @"center";
             [smileLayer setName:@"SmileLayer"];
             [featureLayer addSublayer:smileLayer];
         }
         [featureLayer setFrame:faceRect];
-        [smileLayer setFrame:CGRectMake(0, 0, featureLayer.frame.size.width, 22)];
+        [smileLayer setFrame:CGRectMake(0, 0, featureLayer.frame.size.width, 40)];
         smileLayer.hidden = ![ff hasSmile];
         
         switch (orientation) {
