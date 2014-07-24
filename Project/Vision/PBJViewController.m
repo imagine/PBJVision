@@ -33,6 +33,8 @@
 #import <AssetsLibrary/AssetsLibrary.h>
 #import <GLKit/GLKit.h>
 
+static CGFloat DegreesToRadians(CGFloat degrees) {return degrees * (CGFloat)M_PI / 180;};
+
 @interface ExtendedHitButton : UIButton
 
 + (instancetype)extendedHitButton;
@@ -142,7 +144,7 @@
     _previewView.frame = previewFrame;
     _previewLayer = [[PBJVision sharedInstance] previewLayer];
     _previewLayer.frame = _previewView.bounds;
-    _previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+    _previewLayer.videoGravity = AVLayerVideoGravityResizeAspect;
     [_previewView.layer addSublayer:_previewLayer];
     
     // onion skin
@@ -621,6 +623,160 @@
 - (void)visionDidCaptureVideoSample:(PBJVision *)vision
 {
 //    NSLog(@"captured video (%f) seconds", vision.capturedVideoSeconds);
+}
+
+- (void)vision:(PBJVision *)vision didDetectFaceFeatures:(NSArray *)features
+{
+    UIDeviceOrientation orientation = [[UIDevice currentDevice] orientation];
+    CGRect clap = [[PBJVision sharedInstance] cleanAperture];
+    
+    NSArray *sublayers = [NSArray arrayWithArray:[_previewLayer sublayers]];
+    NSUInteger sublayersCount = [sublayers count], currentSublayer = 0;
+    NSUInteger featuresCount = [features count], currentFeature = 0;
+    
+    [CATransaction begin];
+    [CATransaction setValue:(id)kCFBooleanTrue forKey:kCATransactionDisableActions];
+    
+    // hide all the face layers
+    for ( CALayer *layer in sublayers ) {
+        if ( [[layer name] isEqualToString:@"FaceLayer"] )
+            [layer setHidden:YES];
+    }
+    
+    if ( featuresCount == 0 ) {
+        [CATransaction commit];
+        return; // early bail.
+    }
+    
+    CGSize parentFrameSize = [_previewLayer frame].size;
+    NSString *gravity = [_previewLayer videoGravity];
+    BOOL isMirrored = [[PBJVision sharedInstance] isMirrored];
+    CGRect previewBox = [PBJViewController videoPreviewBoxForGravity:gravity
+                                                           frameSize:parentFrameSize
+                                                        apertureSize:clap.size];
+    
+    for ( CIFaceFeature *ff in features ) {
+        // find the correct position for the square layer within the previewLayer
+        // the feature box originates in the bottom left of the video frame.
+        // (Bottom right if mirroring is turned on)
+        CGRect faceRect = [ff bounds];
+        
+        // flip preview width and height
+        CGFloat temp = faceRect.size.width;
+        faceRect.size.width = faceRect.size.height;
+        faceRect.size.height = temp;
+        temp = faceRect.origin.x;
+        faceRect.origin.x = faceRect.origin.y;
+        faceRect.origin.y = temp;
+        // scale coordinates so they fit in the preview box, which may be scaled
+        CGFloat widthScaleBy = previewBox.size.width / clap.size.height;
+        CGFloat heightScaleBy = previewBox.size.height / clap.size.width;
+        faceRect.size.width *= widthScaleBy;
+        faceRect.size.height *= heightScaleBy;
+        faceRect.origin.x *= widthScaleBy;
+        faceRect.origin.y *= heightScaleBy;
+        
+        if ( isMirrored )
+            faceRect = CGRectOffset(faceRect, previewBox.origin.x + previewBox.size.width - faceRect.size.width - (faceRect.origin.x * 2), previewBox.origin.y);
+        else
+            faceRect = CGRectOffset(faceRect, previewBox.origin.x, previewBox.origin.y);
+        
+        CALayer *featureLayer = nil;
+        CATextLayer *smileLayer = nil; // sublayer of featureLayer
+        
+        // re-use an existing layer if possible
+        while ( !featureLayer && (currentSublayer < sublayersCount) ) {
+            CALayer *currentLayer = [sublayers objectAtIndex:currentSublayer++];
+            if ( [[currentLayer name] isEqualToString:@"FaceLayer"] ) {
+                featureLayer = currentLayer;
+                smileLayer = [featureLayer sublayers][0];
+                [currentLayer setHidden:NO];
+            }
+        }
+        
+        // create a new one if necessary
+        if ( !featureLayer ) {
+            featureLayer = [CALayer new];
+            [featureLayer setContents:(id)[[UIImage imageNamed:@"squarePNG"] CGImage]];
+            [featureLayer setName:@"FaceLayer"];
+            [_previewLayer addSublayer:featureLayer];
+
+            smileLayer = [CATextLayer new];
+            smileLayer.string = @"😃";
+            smileLayer.foregroundColor = [UIColor whiteColor].CGColor;
+            smileLayer.alignmentMode = @"center";
+            [smileLayer setName:@"SmileLayer"];
+            [featureLayer addSublayer:smileLayer];
+        }
+        [featureLayer setFrame:faceRect];
+        [smileLayer setFrame:CGRectMake(0, 0, featureLayer.frame.size.width, 22)];
+        smileLayer.hidden = ![ff hasSmile];
+        
+        switch (orientation) {
+            case UIDeviceOrientationPortrait:
+                [featureLayer setAffineTransform:CGAffineTransformMakeRotation(DegreesToRadians(0.))];
+                break;
+            case UIDeviceOrientationPortraitUpsideDown:
+                [featureLayer setAffineTransform:CGAffineTransformMakeRotation(DegreesToRadians(180.))];
+                break;
+            case UIDeviceOrientationLandscapeLeft:
+                [featureLayer setAffineTransform:CGAffineTransformMakeRotation(DegreesToRadians(90.))];
+                break;
+            case UIDeviceOrientationLandscapeRight:
+                [featureLayer setAffineTransform:CGAffineTransformMakeRotation(DegreesToRadians(-90.))];
+                break;
+            case UIDeviceOrientationFaceUp:
+            case UIDeviceOrientationFaceDown:
+            default:
+                break; // leave the layer in its last known orientation
+        }
+        currentFeature++;
+    }
+    
+    [CATransaction commit];
+}
+
+// find where the video box is positioned within the preview layer based on the video size and gravity
++ (CGRect)videoPreviewBoxForGravity:(NSString *)gravity frameSize:(CGSize)frameSize apertureSize:(CGSize)apertureSize
+{
+    CGFloat apertureRatio = apertureSize.height / apertureSize.width;
+    CGFloat viewRatio = frameSize.width / frameSize.height;
+    
+    CGSize size = CGSizeZero;
+    if ([gravity isEqualToString:AVLayerVideoGravityResizeAspectFill]) {
+        if (viewRatio > apertureRatio) {
+            size.width = frameSize.width;
+            size.height = apertureSize.width * (frameSize.width / apertureSize.height);
+        } else {
+            size.width = apertureSize.height * (frameSize.height / apertureSize.width);
+            size.height = frameSize.height;
+        }
+    } else if ([gravity isEqualToString:AVLayerVideoGravityResizeAspect]) {
+        if (viewRatio > apertureRatio) {
+            size.width = apertureSize.height * (frameSize.height / apertureSize.width);
+            size.height = frameSize.height;
+        } else {
+            size.width = frameSize.width;
+            size.height = apertureSize.width * (frameSize.width / apertureSize.height);
+        }
+    } else if ([gravity isEqualToString:AVLayerVideoGravityResize]) {
+        size.width = frameSize.width;
+        size.height = frameSize.height;
+    }
+    
+    CGRect videoBox;
+    videoBox.size = size;
+    if (size.width < frameSize.width)
+        videoBox.origin.x = (frameSize.width - size.width) / 2;
+    else
+        videoBox.origin.x = (size.width - frameSize.width) / 2;
+    
+    if ( size.height < frameSize.height )
+        videoBox.origin.y = (frameSize.height - size.height) / 2;
+    else
+        videoBox.origin.y = (size.height - frameSize.height) / 2;
+    
+    return videoBox;
 }
 
 @end

@@ -138,6 +138,7 @@ static CGFloat const PBJVideoBitRate1280x750 = 5000000 * 8;
 @property (nonatomic, readonly, getter=isFlashAvailable) BOOL flashAvailable;
 
 @property (nonatomic) PBJMirroringMode mirroringMode;
+@property (nonatomic, getter=isMirrored) BOOL mirrored;
 
 // video output settings
 
@@ -285,5 +286,6 @@ static CGFloat const PBJVideoBitRate1280x750 = 5000000 * 8;
 
 - (void)vision:(PBJVision *)vision didCaptureVideoSampleBuffer:(CMSampleBufferRef)sampleBuffer;
 - (void)vision:(PBJVision *)vision didCaptureAudioSample:(CMSampleBufferRef)sampleBuffer;
+- (void)vision:(PBJVision *)vision didDetectFaceFeatures:(NSArray*)features;
 
 @end

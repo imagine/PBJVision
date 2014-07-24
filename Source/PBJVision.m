@@ -137,6 +137,7 @@ typedef NS_ENUM(GLint, PBJVisionUniformLocationTypes)
     AVCaptureOutput *_currentOutput;
     
     AVCaptureVideoPreviewLayer *_previewLayer;
+    CIDetector *_faceDetector;
     CGRect _cleanAperture;
 
     CMTime _startTimestamp;
@@ -192,6 +193,7 @@ typedef NS_ENUM(GLint, PBJVisionUniformLocationTypes)
 @synthesize exposureMode = _exposureMode;
 @synthesize flashMode = _flashMode;
 @synthesize mirroringMode = _mirroringMode;
+@synthesize mirrored = _mirrored;
 @synthesize outputFormat = _outputFormat;
 @synthesize context = _context;
 @synthesize presentationFrame = _presentationFrame;
@@ -1009,11 +1011,15 @@ typedef void (^PBJVisionBlock)();
                 if ([_captureSession canAddOutput:_captureOutputAudio]) {
                     [_captureSession addOutput:_captureOutputAudio];
                 }
-                // vidja output
+                // video output
                 if ([_captureSession canAddOutput:_captureOutputVideo]) {
                     [_captureSession addOutput:_captureOutputVideo];
                     newCaptureOutput = _captureOutputVideo;
                 }
+
+                NSDictionary *detectorOptions = @{CIDetectorAccuracy:CIDetectorAccuracyLow};
+                _faceDetector = [CIDetector detectorOfType:CIDetectorTypeFace context:nil options:detectorOptions];
+
                 break;
             }
             case PBJCameraModePhoto:
@@ -1047,14 +1053,15 @@ typedef void (^PBJVisionBlock)();
     if ( newCaptureOutput && (newCaptureOutput == _captureOutputVideo) && videoConnection ) {
         
         // setup video orientation
-        [self _setOrientationForConnection:videoConnection];
+        //#warning this breaks it
+//        [self _setOrientationForConnection:videoConnection];
         
         // setup video stabilization, if available
         if ([videoConnection isVideoStabilizationSupported])
             [videoConnection setEnablesVideoStabilizationWhenAvailable:YES];
 
         // discard late frames
-        [_captureOutputVideo setAlwaysDiscardsLateVideoFrames:NO];
+        [_captureOutputVideo setAlwaysDiscardsLateVideoFrames:YES];
         
         // specify video preset
         sessionPreset = _captureSessionPreset;
@@ -1383,6 +1390,7 @@ typedef void (^PBJVisionBlock)();
     switch (_mirroringMode) {
 		case PBJMirroringOff:
         {
+            self.mirrored = NO;
 			if ([videoConnection isVideoMirroringSupported]) {
 				[videoConnection setVideoMirrored:NO];
 			}
@@ -1394,7 +1402,8 @@ typedef void (^PBJVisionBlock)();
 		}
         case PBJMirroringOn:
         {
-			if ([videoConnection isVideoMirroringSupported]) {
+            self.mirrored = YES;
+            if ([videoConnection isVideoMirroringSupported]) {
 				[videoConnection setVideoMirrored:YES];
 			}
 			if ([previewConnection isVideoMirroringSupported]) {
@@ -1407,6 +1416,7 @@ typedef void (^PBJVisionBlock)();
         default:
 		{
 			BOOL mirror = (_cameraDevice == PBJCameraDeviceFront);
+            self.mirrored = mirror;
         
 			if ([videoConnection isVideoMirroringSupported]) {
 				[videoConnection setVideoMirrored:mirror];
@@ -1497,6 +1507,53 @@ typedef void (^PBJVisionBlock)();
     return thumbnail;
 }
 
+
+- (NSInteger)_exifOrientationForDeviceOrientation:(UIDeviceOrientation)deviceOrientation
+{
+    int exifOrientation;
+    
+    /* kCGImagePropertyOrientation values
+     The intended display orientation of the image. If present, this key is a CFNumber value with the same value as defined
+     by the TIFF and EXIF specifications -- see enumeration of integer constants.
+     The value specified where the origin (0,0) of the image is located. If not present, a value of 1 is assumed.
+     
+     used when calling featuresInImage: options: The value for this key is an integer NSNumber from 1..8 as found in kCGImagePropertyOrientation.
+     If present, the detection will be done based on that orientation but the coordinates in the returned features will still be based on those of the image. */
+    
+    enum {
+        PHOTOS_EXIF_0ROW_TOP_0COL_LEFT          = 1, //   1  =  0th row is at the top, and 0th column is on the left (THE DEFAULT).
+        PHOTOS_EXIF_0ROW_TOP_0COL_RIGHT         = 2, //   2  =  0th row is at the top, and 0th column is on the right.
+        PHOTOS_EXIF_0ROW_BOTTOM_0COL_RIGHT      = 3, //   3  =  0th row is at the bottom, and 0th column is on the right.
+        PHOTOS_EXIF_0ROW_BOTTOM_0COL_LEFT       = 4, //   4  =  0th row is at the bottom, and 0th column is on the left.
+        PHOTOS_EXIF_0ROW_LEFT_0COL_TOP          = 5, //   5  =  0th row is on the left, and 0th column is the top.
+        PHOTOS_EXIF_0ROW_RIGHT_0COL_TOP         = 6, //   6  =  0th row is on the right, and 0th column is the top.
+        PHOTOS_EXIF_0ROW_RIGHT_0COL_BOTTOM      = 7, //   7  =  0th row is on the right, and 0th column is the bottom.
+        PHOTOS_EXIF_0ROW_LEFT_0COL_BOTTOM       = 8  //   8  =  0th row is on the left, and 0th column is the bottom.
+    };
+    
+    switch (deviceOrientation) {
+        case UIDeviceOrientationPortraitUpsideDown:  // Device oriented vertically, home button on the top
+            exifOrientation = PHOTOS_EXIF_0ROW_LEFT_0COL_BOTTOM;
+            break;
+        case UIDeviceOrientationLandscapeLeft:       // Device oriented horizontally, home button on the right
+            if (_cameraDevice == PBJCameraDeviceFront)
+                exifOrientation = PHOTOS_EXIF_0ROW_BOTTOM_0COL_RIGHT;
+            else
+                exifOrientation = PHOTOS_EXIF_0ROW_TOP_0COL_LEFT;
+            break;
+        case UIDeviceOrientationLandscapeRight:      // Device oriented horizontally, home button on the left
+            if (_cameraDevice == PBJCameraDeviceFront)
+                exifOrientation = PHOTOS_EXIF_0ROW_TOP_0COL_LEFT;
+            else
+                exifOrientation = PHOTOS_EXIF_0ROW_BOTTOM_0COL_RIGHT;
+            break;
+        case UIDeviceOrientationPortrait:            // Device oriented vertically, home button on the bottom
+        default:
+            exifOrientation = PHOTOS_EXIF_0ROW_RIGHT_0COL_TOP;
+            break;
+    }
+    return exifOrientation;
+}
 
 - (UIImageOrientation)_imageOrientationFromExifOrientation:(NSInteger)exifOrientation
 {
@@ -1671,6 +1728,7 @@ typedef void (^PBJVisionBlock)();
         _mediaWriter.delegate = self;
 
         AVCaptureConnection *videoConnection = [_captureOutputVideo connectionWithMediaType:AVMediaTypeVideo];
+        [videoConnection setEnabled:YES];
         [self _setOrientationForConnection:videoConnection];
 
         _startTimestamp = CMClockGetTime(CMClockGetHostTimeClock());
@@ -1968,6 +2026,28 @@ typedef void (^PBJVisionBlock)();
 
 - (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection
 {
+    // got an image
+    CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    CFDictionaryRef attachments = CMCopyDictionaryOfAttachments(kCFAllocatorDefault, sampleBuffer, kCMAttachmentMode_ShouldPropagate);
+    CIImage *ciImage = [[CIImage alloc] initWithCVPixelBuffer:pixelBuffer options:(__bridge NSDictionary *)attachments];
+    if (attachments)
+        CFRelease(attachments);
+    NSDictionary *imageOptions = nil;
+    UIDeviceOrientation curDeviceOrientation = [[UIDevice currentDevice] orientation];
+
+    imageOptions = @{CIDetectorImageOrientation:@([self _exifOrientationForDeviceOrientation:curDeviceOrientation]), CIDetectorSmile:@YES};
+    
+    // How many ms does this take? at 30fps, can derive live or post-processing time
+    NSArray *features = [_faceDetector featuresInImage:ciImage
+                                               options:imageOptions];
+    
+    dispatch_async(dispatch_get_main_queue(), ^(void) {
+        if([self.delegate respondsToSelector:@selector(vision:didDetectFaceFeatures:)])
+            [self.delegate vision:self didDetectFaceFeatures:features];
+    });
+
+    //---------------
+    
 	CFRetain(sampleBuffer);
     
     if (!CMSampleBufferDataIsReady(sampleBuffer)) {
