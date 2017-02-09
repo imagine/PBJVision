@@ -2191,6 +2191,13 @@ previewPhotoSampleBuffer:(CMSampleBufferRef)previewPhotoSampleBuffer
         return;
     }
 
+    BOOL isVideo = (captureOutput == _captureOutputVideo);
+    if (isVideo) {
+        if([_delegate respondsToSelector:@selector(vision:didReceiveVideoSampleBuffer:)]) {
+            [_delegate vision:self didReceiveVideoSampleBuffer:sampleBuffer];
+        }
+    }
+    
     if (!_flags.recording || _flags.paused) {
         CFRelease(sampleBuffer);
         return;
@@ -2202,7 +2209,6 @@ previewPhotoSampleBuffer:(CMSampleBufferRef)previewPhotoSampleBuffer
     }
     
     // setup media writer
-    BOOL isVideo = (captureOutput == _captureOutputVideo);
     if (!isVideo && !_mediaWriter.isAudioReady) {
         [self _setupMediaWriterAudioInputWithSampleBuffer:sampleBuffer];
         DLog(@"ready for audio (%d)", _mediaWriter.isAudioReady);
@@ -2211,7 +2217,7 @@ previewPhotoSampleBuffer:(CMSampleBufferRef)previewPhotoSampleBuffer
         [self _setupMediaWriterVideoInputWithSampleBuffer:sampleBuffer];
         DLog(@"ready for video (%d)", _mediaWriter.isVideoReady);
     }
-
+    
     BOOL isReadyToRecord = ((!_flags.audioCaptureEnabled || _mediaWriter.isAudioReady) && _mediaWriter.isVideoReady);
     if (!isReadyToRecord) {
         CFRelease(sampleBuffer);

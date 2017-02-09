@@ -26,6 +26,7 @@
 #import "PBJViewController.h"
 #import "PBJStrobeView.h"
 #import "PBJFocusView.h"
+#import "PBJCoreImageView.h"
 
 #import "PBJVision.h"
 #import "PBJVisionUtilities.h"
@@ -117,7 +118,7 @@ static NSString * const PBJViewControllerPhotoAlbum = @"PBJVision";
     UIButton *_onionButton;
     UIView *_captureDock;
 
-    UIView *_previewView;
+    PBJCoreImageView *_previewView;
     AVCaptureVideoPreviewLayer *_previewLayer;
     PBJFocusView *_focusView;
     GLKViewController *_effectsViewController;
@@ -181,6 +182,7 @@ static NSString * const PBJViewControllerPhotoAlbum = @"PBJVision";
     [_doneButton addTarget:self action:@selector(_handleDoneButton:) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:_doneButton];
 
+#if 0
     // preview and AV layer
     _previewView = [[UIView alloc] initWithFrame:CGRectZero];
     _previewView.backgroundColor = [UIColor blackColor];
@@ -190,6 +192,13 @@ static NSString * const PBJViewControllerPhotoAlbum = @"PBJVision";
     _previewLayer.frame = _previewView.bounds;
     _previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
     [_previewView.layer addSublayer:_previewLayer];
+#else
+    // buffer-streamed preview instead of AVCaptureVideoPreviewLayer
+    _previewView = [[PBJCoreImageView alloc] initWithFrame:CGRectZero context:[[PBJVision sharedInstance] context]];
+    _previewView.backgroundColor = [UIColor blackColor];
+    CGRect previewFrame = CGRectMake(0, 60.0f, CGRectGetWidth(self.view.frame), CGRectGetWidth(self.view.frame));
+    _previewView.frame = previewFrame;
+#endif
     
     // onion skin
     _effectsViewController = [[GLKViewController alloc] init];
@@ -697,6 +706,21 @@ static NSString * const PBJViewControllerPhotoAlbum = @"PBJVision";
             NSLog(@"error: %@", error1);
         }
     }];
+}
+
+
+
+- (void)vision:(PBJVision *)vision didReceiveVideoSampleBuffer:(nonnull CMSampleBufferRef)sampleBuffer
+{
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    CIImage *ciImage = [CIImage imageWithCVImageBuffer:imageBuffer];
+    CIFilter *comicFilter = [CIFilter filterWithName:@"CIComicEffect"];
+    [comicFilter setValue:ciImage forKey:kCIInputImageKey];
+    ciImage = comicFilter.outputImage;
+    
+    CMFormatDescriptionRef formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer);
+    CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(formatDesc);
+    [_previewView setImage:ciImage withDimensions:dimensions];
 }
 
 // progress
